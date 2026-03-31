@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/transparency-dev/formats/log"
 	"github.com/transparency-dev/merkle/compact"
@@ -33,7 +34,11 @@ import (
 	"github.com/transparency-dev/tessera/api"
 	"github.com/transparency-dev/tessera/api/layout"
 	"github.com/transparency-dev/tesseract/internal/types/staticct"
+	"github.com/transparency-dev/tesseract/internal/x509util"
 	"golang.org/x/mod/sumdb/note"
+	tlog "github.com/transparency-dev/formats/log"
+
+	"crypto/x509"
 )
 
 var (
@@ -487,4 +492,251 @@ func fetchPartialOrFullTile(ctx context.Context, f TileFetcherFunc, l, i uint64,
 	default:
 		return sRaw, nil
 	}
+}
+
+// Monitor monitors a TesseraCT log and can verify proofs
+type Monitor struct {
+	fetcher *S3Fetcher
+	logStateTracker LogStateTracker
+	verifier note.Verifier
+}
+
+// NewMonitor creates a new Monitor for the given log URL
+func NewMonitor(ctx context.Context, f *S3Fetcher, verifier note.Verifier, origin string) (*Monitor, error) {
+	
+	// Create log state tracker
+	tracker, err := NewLogStateTracker(
+		ctx,
+		f.ReadCheckpoint,
+		f.ReadTile,
+		[]byte{},
+		verifier,
+		origin,
+		UnilateralConsensus(f.ReadCheckpoint),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log state tracker: %w", err)
+	}
+
+	return &Monitor{
+		fetcher:			f,
+		logStateTracker: 	tracker,
+		verifier: 			verifier,
+	}, nil
+}
+
+// UpdateCheckpoint fetches the latest checkpoint from the log and verifies consistency.
+// Returns the old checkpoint, consistency proof, and new checkpoint.
+func (m *Monitor) UpdateCheckpoint(ctx context.Context) ([]byte, [][]byte, []byte, error) {
+	oldCP, proof, newCP, err := m.logStateTracker.Update(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to update checkpoint: %w", err)
+	}
+	return oldCP, proof, newCP, nil
+}
+
+// InclusionProof builds an inclusion proof for a leaf at the given index.
+// The proof is relative to the current tracked checkpoint.
+func (m *Monitor) InclusionProof(ctx context.Context, leafIndex uint64) ([][]byte, error) {
+	if m.logStateTracker.ProofBuilder == nil {
+		return nil, fmt.Errorf("proof builder not initialized")
+	}
+
+	proofNodes, err := m.logStateTracker.ProofBuilder.InclusionProof(ctx, leafIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build inclusion proof: %w", err)
+	}
+	return proofNodes, nil
+}
+
+// ConsistencyProof builds a consistency proof between two tree sizes.
+// If smallerSize is 0, the larger size is used as the target size.
+func (m *Monitor) ConsistencyProof(ctx context.Context, smallerSize, largerSize uint64) ([][]byte, error) {
+	if m.logStateTracker.ProofBuilder == nil {
+		return nil, fmt.Errorf("proof builder not initialized")
+	}
+
+	proofNodes, err := m.logStateTracker.ProofBuilder.ConsistencyProof(ctx, smallerSize, largerSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build consistency proof: %w", err)
+	}
+	return proofNodes, nil
+}
+
+// VerifyConsistencyProof verifies a consistency proof between two checkpoints.
+func (m *Monitor) VerifyConsistencyProof(
+	smallerCP, largerCP *tlog.Checkpoint,
+	proofNodes [][]byte,
+) error {
+	if err := proof.VerifyConsistency(
+		hasher,
+		smallerCP.Size,
+		largerCP.Size,
+		proofNodes,
+		smallerCP.Hash,
+		largerCP.Hash,
+	); err != nil {
+		return fmt.Errorf("consistency proof verification failed: %w", err)
+	}
+	return nil
+}
+
+// VerifyInclusionProof verifies an inclusion proof for a leaf at the given index.
+func (m *Monitor) VerifyInclusionProof(
+	leafHash []byte,
+	leafIndex uint64,
+	cp *tlog.Checkpoint,
+	proofNodes [][]byte,
+) error {
+	if err := proof.VerifyInclusion(
+		hasher,
+		leafIndex,
+		cp.Size,
+		leafHash,
+		proofNodes,
+		cp.Hash,
+	); err != nil {
+		return fmt.Errorf("inclusion proof verification failed: %w", err)
+	}
+	return nil
+}
+
+// VerifyCheckpointSignature verifies that the checkpoint is properly signed by the log.
+// Returns true if signature verification succeeds, false otherwise.
+func (m *Monitor) VerifyCheckpointSignature(cp *tlog.Checkpoint, origin string, checkpointRaw []byte) (bool, error) {
+	cpNote, err := note.Open(checkpointRaw, note.VerifierList(m.verifier))
+	if err != nil {
+		return false, fmt.Errorf("failed to open signed checkpoint: %w", err)
+	}
+
+	// Verify the checkpoint was parsed correctly
+	parsedCP, _, _, err := tlog.ParseCheckpoint(checkpointRaw, origin, m.verifier)
+	if err != nil {
+		return false, fmt.Errorf("failed to parse checkpoint: %w", err)
+	}
+
+	if cpNote == nil || parsedCP == nil {
+		return false, fmt.Errorf("checkpoint verification produced nil result")
+	}
+
+	return true, nil
+}
+
+// GetLatestCheckpoint returns the current tracked checkpoint.
+func (m *Monitor) GetLatestCheckpoint() *tlog.Checkpoint {
+	return &m.logStateTracker.LatestConsistent
+}
+
+// ProcessBundle downloads an entire bundle and looks for the domain
+func ProcessBundle(ctx context.Context, f *S3Fetcher, mon *Monitor, bIdx uint64, cp *tlog.Checkpoint, target string, startIdx, endIdx uint64) error {
+    // 1. Retrieve the bundles using the GetEntryBundle function provided by client.go
+	fmt.Printf("  -> Scanning bundle %d...\n", bIdx)
+    bundle, err := GetEntryBundle(ctx, f.ReadEntryBundle, bIdx, cp.Size)
+    if err != nil {
+        return err
+    }
+
+	if len(bundle.Entries) == 0 {
+        fmt.Printf("  Bundle %d is empty\n", bIdx)
+    }
+
+    // 2. Iterate the entries splitted by UnmarshalText provided by staticct.go
+    for i, rawEntry := range bundle.Entries {
+        globalIdx := (bIdx * 256) + uint64(i)
+
+        // Filter index out of range
+        if globalIdx < startIdx || globalIdx > endIdx {
+            continue
+        }
+
+        // 3. Parsing of entry
+        var entry staticct.Entry
+        if err := entry.UnmarshalText(rawEntry); err != nil {
+            continue 
+        }
+
+        // 4. Call of SearchDomainInCert to search the domain in the entry
+        if match, matchedName, cert := SearchDomainInCert(entry, target); match {
+            fmt.Printf("\n[MATCH] Index %d | CN=%s\n", globalIdx, matchedName)
+			if cert != nil {
+				fmt.Printf("Subject: %s\n", cert.Subject)
+			}
+
+			leafData := x509util.ToRFC6962Leaf(entry)
+            // 5. Inclusion Proof verify
+            nodes, err := mon.InclusionProof(ctx, globalIdx)
+            if err != nil {
+                fmt.Printf("  Proof error: %v\n", err)
+                continue
+            }
+
+            // Compute leaf hash
+            leafHash := hasher.HashLeaf(leafData)
+            
+            if err := mon.VerifyInclusionProof(leafHash, globalIdx, cp, nodes); err != nil {
+                fmt.Printf("  Inclusion proof FAILED: %v\n", err)
+            } else {
+                fmt.Printf("  Inclusion proof OK\n")
+            }
+        }
+    }
+    return nil
+}
+
+// SearchDomainInCert parses the X.509 certificate and search the domain in the CN and in the SANs
+func SearchDomainInCert(entry staticct.Entry, target string) (bool, string, *x509.Certificate) {
+	target = strings.ToLower(target)
+	cert, err := x509.ParseCertificate(entry.Certificate)
+	if err != nil {
+		if strings.Contains(strings.ToLower(string(entry.Certificate)), target) {
+			fmt.Printf("This is a precertificate\n")
+			return true, "Pre-cert", nil
+		}
+		return false, "", nil
+	}
+	
+	// Checks the Common Name
+	if strings.Contains(strings.ToLower(cert.Subject.CommonName), target) {
+		return true, cert.Subject.CommonName, cert
+	}
+	// Checks the SANs (Subject Alternative Names)
+	for _, dns := range cert.DNSNames {
+		if strings.Contains(strings.ToLower(dns), target) {
+			return true, dns, cert
+		}
+	}
+	return false, "", nil
+}
+
+// ExtractDomains tira fuori ogni possibile FQDN da un certificato.
+func ExtractDomains(certBytes []byte) []string {
+    // Usiamo lax509 per non schiantarci su certificati malformati
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		return nil 
+	}
+
+	uniqueDomains := make(map[string]struct{})
+
+	// 1. Estraiamo il Common Name (CN)
+	cn := strings.ToLower(strings.TrimSpace(cert.Subject.CommonName))
+	if cn != "" && !strings.Contains(cn, " ") { // Pulizia base
+		uniqueDomains[cn] = struct{}{}
+	}
+
+	// 2. Estraiamo i Subject Alternative Names (SAN)
+	for _, dns := range cert.DNSNames {
+		d := strings.ToLower(strings.TrimSpace(dns))
+		if d != "" {
+			uniqueDomains[d] = struct{}{}
+		}
+	}
+
+	// Convertiamo la mappa in una slice
+	result := make([]string, 0, len(uniqueDomains))
+	for d := range uniqueDomains {
+		result = append(result, d)
+	}
+
+	return result
 }

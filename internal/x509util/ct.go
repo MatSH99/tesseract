@@ -26,6 +26,7 @@ import (
 
 	"github.com/transparency-dev/tessera/ctonly"
 	"github.com/transparency-dev/tesseract/internal/types/rfc6962"
+	"github.com/transparency-dev/tesseract/internal/types/staticct"
 
 	"golang.org/x/crypto/cryptobyte"
 	cryptobyte_asn1 "golang.org/x/crypto/cryptobyte/asn1"
@@ -310,4 +311,31 @@ func isPreIssuer(cert *x509.Certificate) bool {
 		}
 	}
 	return false
+}
+
+// ToRFC6962Leaf converts a TesseraCT entry to the standard RFC 6962 leaf
+func ToRFC6962Leaf(e staticct.Entry) []byte {
+	b := cryptobyte.NewBuilder(nil)
+	b.AddUint8(0) // Version V1
+	b.AddUint8(0) // LeafType: timestamped_entry
+	b.AddUint64(e.Timestamp)
+	
+	if e.IsPrecert {
+		b.AddUint16(1) // PrecertLogEntryType
+		b.AddBytes(e.IssuerKeyHash)
+		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
+			b.AddBytes(e.Certificate)
+		})
+	} else {
+		b.AddUint16(0) // X509LogEntryType
+		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
+			b.AddBytes(e.Certificate)
+		})
+	}
+	// Extensions
+	b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+		b.AddBytes([]byte(e.RawExtensions))
+	})
+	
+	return b.BytesOrPanic()
 }

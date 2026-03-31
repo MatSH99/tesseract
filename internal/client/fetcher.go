@@ -30,6 +30,7 @@ import (
 
 	"github.com/cenkalti/backoff/v5"
 	"github.com/transparency-dev/tessera/api/layout"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"k8s.io/klog/v2"
 )
 
@@ -202,4 +203,63 @@ func ctEntriesPath(n uint64, p uint8) string {
 
 func ctIssuerPath(hash []byte) string {
 	return fmt.Sprintf("issuer/%s", hex.EncodeToString(hash))
+}
+
+// S3Fetcher implements file fetching from an AWS S3 bucket.
+type S3Fetcher struct {
+	client *s3.Client
+	bucket string
+	decompressBundles bool
+}
+
+// S3 Fetcher constructor
+func NewS3Fetcher(s3Client *s3.Client, bucket string, decompress bool) *S3Fetcher {
+	return &S3Fetcher{
+		client:				s3Client,
+		bucket:				bucket,
+		decompressBundles:	decompress,
+	}
+}
+
+// ReadEntryBundle retrieves a bundle of entries and decompresses it if needed
+func (f *S3Fetcher) ReadEntryBundle(ctx context.Context, i uint64, p uint8) ([]byte, error) {
+	path := ctEntriesPath(i, p)
+	data, err := f.fetch(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if f.decompressBundles {
+		reader, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %v", err)
+		}
+		defer reader.Close()
+		return io.ReadAll(reader)
+	}
+
+	return data, nil
+}
+
+// Fetch retrieves a file (checkpoint or tile) from S3 using AWS credentials
+func (f *S3Fetcher) fetch(ctx context.Context, key string) ([]byte, error) {
+	output, err := f.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &f.bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch from S3 (%s): %w", key, err)
+	}
+	defer output.Body.Close()
+	return io.ReadAll(output.Body)
+}
+
+// ReadCheckpoint retrieves the checkpoint from S3
+func (f *S3Fetcher) ReadCheckpoint(ctx context.Context) ([]byte, error) {
+	return f.fetch(ctx, layout.CheckpointPath)
+}
+
+// ReadTile retrieves a tile from S3
+func (f *S3Fetcher) ReadTile(ctx context.Context, l, i uint64, p uint8) ([]byte, error) {
+	return f.fetch(ctx, layout.TilePath(l, i, p))
 }

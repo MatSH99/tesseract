@@ -31,6 +31,7 @@ resource "aws_rds_cluster" "log_rds_cluster" {
   master_username             = "tesseract"
   skip_final_snapshot         = true
   apply_immediately           = true
+  db_subnet_group_name = aws_db_subnet_group.db.name
 }
 
 resource "aws_rds_cluster_instance" "cluster_instances" {
@@ -40,6 +41,7 @@ resource "aws_rds_cluster_instance" "cluster_instances" {
   engine             = aws_rds_cluster.log_rds_cluster.engine
   engine_version     = aws_rds_cluster.log_rds_cluster.engine_version
   identifier         = "${var.base_name}-${count.index + 1}"
+  db_subnet_group_name = aws_db_subnet_group.db.name
 
   force_destroy = var.ephemeral
 }

@@ -9,7 +9,7 @@ module "storage" {
   base_name          = var.base_name
   region             = var.region
   ephemeral          = var.ephemeral
-  create_antispam_db = true
+  create_antispam_db = false
 }
 
 module "secretsmanager" {
