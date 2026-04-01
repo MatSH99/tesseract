@@ -31,8 +31,6 @@ import (
 	aaws "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/feature/rds/auth"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/dustin/go-humanize"
 	"github.com/go-sql-driver/mysql"
 	"github.com/transparency-dev/tessera"
@@ -45,23 +43,6 @@ import (
 	"golang.org/x/mod/sumdb/note"
 	"k8s.io/klog/v2"
 )
-
-func generateIAMToken(ctx context.Context, endpoint, region, dbUser string) (string, error) {
-    cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-    if err != nil {
-        return "", err
-    }
-
-    // Genera il token di autenticazione (valido 15 min)
-    authenticationToken, err := auth.BuildAuthToken(
-        ctx, endpoint, region, dbUser, cfg.Credentials,
-    )
-    if err != nil {
-        return "", fmt.Errorf("failed to build auth token: %v", err)
-    }
-
-    return authenticationToken, nil
-}
 
 func init() {
 	flag.Var(&notAfterStart, "not_after_start", "Start of the range of acceptable NotAfter values, inclusive. Leaving this unset or empty implies no lower bound to the range. RFC3339 UTC format, e.g: 2024-01-02T15:04:05Z.")
@@ -379,27 +360,18 @@ func storageConfigFromFlags() taws.Config {
 		klog.Exit("--db_user must be set")
 	}
 	// Empty password isn't an option with AuroraDB MySQL.
-	//if *dbPassword == "" {
-	//	klog.Exit("--db_password must be set")
-	//}
-
-	dbEndpoint := fmt.Sprintf("%s:%d", *dbHost, *dbPort)
-	region := os.Getenv("AWS_REGION")
-
-	token, err := generateIAMToken(context.Background(), dbEndpoint, region, *dbUser)
-	if err != nil {
-		klog.Exitf("Failed generating IAM Token: %v", err)
+	if *dbPassword == "" {
+		klog.Exit("--db_password must be set")
 	}
 
 	c := mysql.Config{
 		User:                    *dbUser,
-		Passwd:                  token,
+		Passwd:                  *dbPassword,
 		Net:                     "tcp",
-		Addr:                    dbEndpoint,
+		Addr:                    fmt.Sprintf("%s:%d", *dbHost, *dbPort),
 		DBName:                  *dbName,
 		AllowCleartextPasswords: true,
 		AllowNativePasswords:    true,
-		TLSConfig:				 "preferred",
 	}
 
 	var s3Opts func(o *s3.Options)
