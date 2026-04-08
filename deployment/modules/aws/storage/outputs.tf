@@ -1,13 +1,13 @@
 output "s3_bucket_name" {
-  value = aws_s3_bucket.log_bucket.id
+  value = aws_s3_directory_bucket.log_bucket.id
 }
 
 output "s3_bucket_arn" {
-  value = aws_s3_bucket.log_bucket.arn
+  value = aws_s3_directory_bucket.log_bucket.arn
 }
 
 output "s3_bucket_regional_domain_name" {
-  value = aws_s3_bucket.log_bucket.bucket_regional_domain_name
+  value = aws_s3_directory_bucket.log_bucket.bucket_regional_domain_name
 }
 
 output "rds_aurora_cluster_endpoint" {
