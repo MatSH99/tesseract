@@ -24,7 +24,7 @@ output "rds_aurora_cluster_database_name" {
 }
 
 output "rds_aurora_cluster_master_user_secret" {
-  value     = aws_rds_cluster.log_rds_cluster.master_user_secret
+  value     = aws_rds_cluster.log_rds_cluster.master_password
   sensitive = true
 }
 
