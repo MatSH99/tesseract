@@ -28,6 +28,11 @@ output "rds_aurora_cluster_master_user_secret" {
   sensitive = true
 }
 
+output "db_password_secret_arn" {
+  value       = aws_secretsmanager_secret.db_pass.arn
+  description = "ARN del segreto creato a mano"
+}
+
 output "rds_aurora_cluster_master_user_secret_unsafe" {
   description = "Retrieved RDS Aurora DB Password (UNSAFE - AVOID IN PRODUCTION)"
   value       = jsondecode(data.aws_secretsmanager_secret_version.db_credentials.secret_string)["password"]
