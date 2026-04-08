@@ -29,3 +29,13 @@ output "ecdsa_p256_private_key_id" {
   description = "Signer private key (P256_SHA256)"
   value       = module.secretsmanager.ecdsa_p256_private_key_id
 }
+
+output "prefix_name" {
+  value = var.prefix_name
+  description = "Prefix used to name the resources"
+}
+
+output "base_name" {
+  value = var.base_name
+  description = "Base name for the resources"
+}
