@@ -2,9 +2,14 @@ terraform {
   backend "s3" {}
 }
 
+variable "availability_zone_id" {
+  type = string
+}
+
 module "storage" {
   source = "../../storage"
 
+  availability_zone_id = var.availability_zone_id
   prefix_name        = var.prefix_name
   base_name          = var.base_name
   region             = var.region
