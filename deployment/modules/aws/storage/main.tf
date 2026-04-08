@@ -27,8 +27,9 @@ resource "aws_rds_cluster" "log_rds_cluster" {
   engine                      = "aurora-mysql"
   engine_version              = "8.0"
   database_name               = "tesseract"
-  manage_master_user_password = true
+  manage_master_user_password = false
   master_username             = "tesseract"
+  master_password             = random_password.master.result
   skip_final_snapshot         = true
   apply_immediately           = true
   db_subnet_group_name = aws_db_subnet_group.db.name
@@ -49,11 +50,12 @@ resource "aws_rds_cluster_instance" "cluster_instances" {
 # Data source to get the secret details using the ARN provided by the cluster
 data "aws_secretsmanager_secret_version" "db_credentials" {
   # The secret ARN is available in the master_user_secret block (it's a list)
-  secret_id = aws_rds_cluster.log_rds_cluster.master_user_secret[0].secret_arn
+  secret_id = aws_secretsmanager_secret.db_pass.id
 
   depends_on = [
     aws_rds_cluster.log_rds_cluster,
-    aws_rds_cluster_instance.cluster_instances
+    aws_rds_cluster_instance.cluster_instances,
+    aws_secretsmanager_secret_version.db_pass
   ]
 }
 

@@ -6,7 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/transparency-dev/formats/log"
 	"github.com/transparency-dev/tesseract/internal/client"
-	"github.com/transparency-dev/tesseract/internal/staticct"
+	"github.com/transparency-dev/tesseract/internal/types/staticct"
 )
 
 // Alias
