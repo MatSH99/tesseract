@@ -16,4 +16,7 @@ include "root" {
 inputs = merge(
   local,
   include.root.locals,
+  {
+    availability_zone_id = include.root.locals.az_id
+  }
 )

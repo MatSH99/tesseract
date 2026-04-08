@@ -16,10 +16,36 @@ provider "aws" {
   region = var.region
 }
 
-resource "aws_s3_bucket" "log_bucket" {
-  bucket = "${var.prefix_name}-${var.base_name}-bucket"
+variable "availability_zone_id" {
+  type        = string
+  description = "The AZ ID where the directory bucket will reside (e.g., euw1-az1)"
+}
+
+resource "aws_s3_directory_bucket" "log_bucket" {
+  bucket = "${var.prefix_name}-${var.base_name}-bucket--${var.availability_zone_id}--x-s3"
+
+  location {
+    name = var.availability_zone_id
+    type = "AvailabilityZone"
+  }
 
   force_destroy = var.ephemeral
+}
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "all" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+resource "aws_db_subnet_group" "db" {
+  name       = "tesseract-ct-db-subnet-group"
+  subnet_ids = data.aws_subnets.all.ids
 }
 
 resource "aws_rds_cluster" "log_rds_cluster" {
