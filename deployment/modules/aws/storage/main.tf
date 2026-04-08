@@ -53,7 +53,7 @@ resource "aws_rds_cluster" "log_rds_cluster" {
   engine                      = "aurora-mysql"
   engine_version              = "8.0"
   database_name               = "tesseract"
-  manage_master_user_password = false
+//  manage_master_user_password = false
   master_username             = "tesseract"
   master_password             = random_password.master.result
   skip_final_snapshot         = true
