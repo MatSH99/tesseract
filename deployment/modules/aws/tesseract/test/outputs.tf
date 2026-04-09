@@ -25,6 +25,11 @@ output "ecdsa_p256_public_key_id" {
   value       = module.secretsmanager.ecdsa_p256_public_key_id
 }
 
+output "db_password_secret_arn" {
+  value       = module.storage.db_password_secret_arn
+  description = "Secret ARN"
+}
+
 output "ecdsa_p256_private_key_id" {
   description = "Signer private key (P256_SHA256)"
   value       = module.secretsmanager.ecdsa_p256_private_key_id
